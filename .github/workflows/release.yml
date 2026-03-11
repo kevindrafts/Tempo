@@ -1,0 +1,115 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  pages: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app
+
+      - name: Resolve packages
+        run: xcodebuild -resolvePackageDependencies -project Tempo.xcodeproj -scheme Tempo
+
+      - name: Build app
+        run: |
+          xcodebuild -project Tempo.xcodeproj \
+            -scheme Tempo \
+            -configuration Release \
+            -derivedDataPath build \
+            -archivePath build/Tempo.xcarchive \
+            archive \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Export app from archive
+        run: |
+          mkdir -p export
+          cp -R build/Tempo.xcarchive/Products/Applications/Tempo.app export/
+
+      - name: Create zip
+        run: |
+          cd export
+          ditto -c -k --keepParent Tempo.app Tempo.zip
+          echo "ZIP_SIZE=$(stat -f%z Tempo.zip)" >> $GITHUB_ENV
+
+      - name: Sign update for Sparkle
+        if: env.SPARKLE_PRIVATE_KEY != ''
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          # Download Sparkle tools
+          curl -sL https://github.com/sparkle-project/Sparkle/releases/download/2.6.4/Sparkle-2.6.4.tar.xz -o sparkle.tar.xz
+          tar xf sparkle.tar.xz
+
+          # Sign the zip
+          SIGNATURE=$(./bin/sign_update export/Tempo.zip -s "$SPARKLE_PRIVATE_KEY" | grep "sparkle:edSignature" | sed 's/.*sparkle:edSignature="\([^"]*\)".*/\1/')
+          echo "ED_SIGNATURE=$SIGNATURE" >> $GITHUB_ENV
+
+      - name: Extract version from tag
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Generate appcast
+        run: |
+          PUBDATE=$(date -R)
+          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/Tempo.zip"
+          ED_SIG="${ED_SIGNATURE:-}"
+
+          SIGNATURE_ATTR=""
+          if [ -n "$ED_SIG" ]; then
+            SIGNATURE_ATTR="sparkle:edSignature=\"$ED_SIG\""
+          fi
+
+          cat > appcast.xml << APPCAST_EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <channel>
+              <title>Tempo</title>
+              <link>https://github.com/${{ github.repository }}</link>
+              <description>Tempo app updates</description>
+              <language>en</language>
+              <item>
+                <title>Version ${{ env.VERSION }}</title>
+                <pubDate>${PUBDATE}</pubDate>
+                <sparkle:version>${{ env.VERSION }}</sparkle:version>
+                <sparkle:shortVersionString>${{ env.VERSION }}</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+                <enclosure url="${DOWNLOAD_URL}" length="${{ env.ZIP_SIZE }}" type="application/octet-stream" ${SIGNATURE_ATTR}/>
+              </item>
+            </channel>
+          </rss>
+          APPCAST_EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: export/Tempo.zip
+          generate_release_notes: true
+
+      - name: Deploy appcast to GitHub Pages
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Create or update gh-pages branch
+          git checkout --orphan gh-pages-temp
+          git rm -rf . 2>/dev/null || true
+          cp appcast.xml .
+          echo '<html><body><h1>Tempo</h1><p><a href="https://github.com/${{ github.repository }}/releases/latest">Download latest release</a></p></body></html>' > index.html
+          git add appcast.xml index.html
+          git commit -m "Update appcast for ${GITHUB_REF_NAME}"
+          git push origin gh-pages-temp:gh-pages --force

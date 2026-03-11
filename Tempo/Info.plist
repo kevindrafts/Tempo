@@ -6,5 +6,9 @@
 	<string>Tempo needs access to your calendars to display and manage your events.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Tempo needs access to your reminders to display and manage your tasks.</string>
+	<key>SUFeedURL</key>
+	<string>https://kevindrafts.github.io/Tempo/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>2svTkGRBKu08QUyz9t9WPtY1wBXzJHsmsl69wnbvVYA</string>
 </dict>
 </plist>
