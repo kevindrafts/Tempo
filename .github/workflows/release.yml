@@ -39,6 +39,12 @@ jobs:
           mkdir -p export
           cp -R build/Tempo.xcarchive/Products/Applications/Tempo.app export/
 
+      - name: Re-sign app bundle
+        run: |
+          # Re-sign all frameworks and the app with the same ad-hoc identity
+          find export/Tempo.app/Contents/Frameworks -name "*.framework" -exec codesign --force --deep --sign - {} \;
+          codesign --force --deep --sign - export/Tempo.app
+
       - name: Create zip
         run: |
           cd export
